@@ -91,9 +91,14 @@ func getTodayMidnightUnix() int64 {
 	return midnight.Unix()
 }
 
-func getCurrentDay() Day {
-	id := getTodayMidnightUnix()
+func getYesterdayMidnightUnix() int64 {
+	now := time.Now()
+	yesterday := now.AddDate(0, 0, -1) // subtract 1 day
+	midnight := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, now.Location())
+	return midnight.Unix()
+}
 
+func getDay(id int64) Day {
 	res, err := DB.Query("Select * From Day Where id = ?", id)
 
 	if err != nil {
@@ -147,8 +152,7 @@ func putTask(t Task) bool {
 	return true
 }
 
-func getTodaysTasks() []Task {
-	id := getTodayMidnightUnix()
+func getTasks(id int64) []Task {
 	var tasks []Task
 
 	rows, err := DB.Query("Select description, minutes, hours, timestamp From Task Where day_id = ?", id)
@@ -172,10 +176,16 @@ func getTodaysTasks() []Task {
 	return tasks
 }
 
-func showWorkToday() string {
-	var res string
+func showYesterdayWork() string {
+	return showWork(getDay(getYesterdayMidnightUnix()))
+}
 
-	day := getCurrentDay()
+func showWorkToday() string {
+	return showWork(getDay(getTodayMidnightUnix()))
+}
+
+func showWork(day Day) string {
+	var res string
 
 	clockedIn := day.start.Unix()
 	clockedOut := day.stop.Unix()
@@ -187,11 +197,57 @@ func showWorkToday() string {
 	res += "----------------------------------\n"
 	res += "Tasks:\n"
 
-	tasks := getTodaysTasks()
+	tasks := getTasks(day.id)
 
 	for _, t := range tasks {
 		res += fmt.Sprintf("%dh%dm - %s\n", t.hours, t.minutes, t.description)
 	}
+	return res
+}
+
+func showWorkWeek() string {
+	var res string
+	res += "Hours worked this week:\n"
+	now := time.Now()
+	weekday := int(now.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	monday := now.AddDate(0, 0, -weekday+1)
+	totalWeek := 0.0
+
+	for i := 0; i < 7; i++ {
+		day := monday.AddDate(0, 0, i)
+		dayID := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location()).Unix()
+
+		var start, stop sql.NullTime
+
+		err := DB.QueryRow("Select start, stop From Day Where id = ?", dayID).Scan(&start, &stop)
+
+		if err != nil {
+			if err == sql.ErrNoRows {
+				res += fmt.Sprintf("%s: 0h0m\n", day.Format("Mon 02"))
+				continue
+			} else {
+				fmt.Println(err)
+				os.Exit(1)
+			}
+		}
+
+		if start.Valid && stop.Valid {
+			clockedIn := start.Time.Unix()
+			clockedOut := stop.Time.Unix()
+			workTime := clockedOut - clockedIn
+			hours := workTime / 3600
+			minutes := (workTime % 3600) / 60
+			totalWeek += float64(hours) + float64(minutes)/60.0
+			res += fmt.Sprintf("%s: %dh%dm\n", day.Format("Mon 02"), hours, minutes)
+		} else {
+			res += fmt.Sprintf("%s: 0h0m\n", day.Format("Mon 02"))
+		}
+	}
+	res += "----------------------------------\n"
+	res += fmt.Sprintf("Total hours worked this week: %.1fh\n", totalWeek)
 	return res
 }
 
@@ -206,17 +262,18 @@ func main() {
 	description := flag.String("description", "", "What was your task")
 	flag.StringVar(description, "d", "", "What was your task")
 
+	yesterday := flag.Bool("yesterday", false, "What did i do yesterday")
 	today := flag.Bool("today", false, "What did i do today")
+	week := flag.Bool("week", false, "Hours per day worked this week")
 
-	// Parse the command-line flags
 	flag.Parse()
 
-	if !(*start || *stop || *versionFlag || *today) && (len(*description) == 0 || len(*duration) == 0) {
+	if !(*start || *stop || *versionFlag || *today || *week || *yesterday) && (len(*description) == 0 || len(*duration) == 0) {
 		fmt.Println("Missing flags\n")
 		os.Exit(1)
 	}
 
-	currentDay := getCurrentDay()
+	currentDay := getDay(getTodayMidnightUnix())
 
 	if *start {
 		currentDay.start = time.Now()
@@ -224,6 +281,12 @@ func main() {
 		currentDay.stop = time.Now()
 	} else if *today {
 		str := showWorkToday()
+		fmt.Println(str)
+	} else if *week {
+		str := showWorkWeek()
+		fmt.Println(str)
+	} else if *yesterday {
+		str := showYesterdayWork()
 		fmt.Println(str)
 	} else {
 		hur, min := getWorkTime(*duration)
