@@ -188,7 +188,13 @@ func showWork(day Day) string {
 	var res string
 
 	clockedIn := day.start.Unix()
+
 	clockedOut := day.stop.Unix()
+
+	if clockedOut == -62135596800 {
+		clockedOut = time.Now().Unix()
+	}
+
 	workTime := clockedOut - clockedIn
 
 	res += fmt.Sprintf("Clocked in at: %s\n", day.start.Format("15:04"))
